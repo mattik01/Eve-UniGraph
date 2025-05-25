@@ -35,6 +35,12 @@
 - Includes example queries, such as:
   - Finding quiet Abyssal systems
 
+### NOT YET IMPLEMENTED
+- Player Structure Information
+- Market Data
+- Updating Abyssal NPC Buyer Information
+- and much more... if it interests me or upon request I can implement it, otherwise feel free to make your own additions. 
+
 
 ## Philosophy
 
