@@ -32,8 +32,9 @@
 ### ❓ `graph-queries.ipynb`
 
 - Notebook to load and run queries on the graph.
-- Includes example queries, such as:
+- Includes example queries, such as
   - Finding quiet Abyssal systems
+  - Finding DED Farming Systems (avoid dangerous LS spawns)
 
 ### NOT YET IMPLEMENTED
 - Player Structure Information

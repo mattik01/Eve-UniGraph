@@ -6,7 +6,7 @@ import json
 import pandas as pd
 import os
 from datetime import datetime, timedelta
-from collections import deque
+from collections import deque, defaultdict
 
 
 
@@ -696,3 +696,191 @@ def find_abyss_hubs(G,
         print(" ")
         print("------------------------------------------------------------------------------------------------------------")
         print(" ")
+
+
+def count_reachable_nodes(graph, start_node, max_jumps):
+    visited = set()
+    queue = deque([(start_node, 0)])
+    while queue:
+        nid, dist = queue.popleft()
+        if nid in visited or dist > max_jumps:
+            continue
+        visited.add(nid)
+        for neighbor in graph[nid]:
+            if neighbor not in visited:
+                queue.append((neighbor, dist + 1))
+    return visited
+
+def count_highsec_reachable_nodes(graph, start_node, max_jumps):
+    visited = set()
+    queue = deque([(start_node, 0)])
+    while queue:
+        nid, dist = queue.popleft()
+        if nid in visited or dist > max_jumps:
+            continue
+        visited.add(nid)
+        for neighbor in graph[nid]:
+            if neighbor not in visited and graph.nodes[neighbor].get("security_status", 0) >= 0.5:
+                queue.append((neighbor, dist + 1))
+    return visited
+
+
+def find_ded_farming_bases(
+    graph,
+    target_faction,
+    spawn_radius=15,
+    close_range=5,
+    use_avoid_list=True,
+    avoid_list_path="util/system_avoid_list.csv",
+    quiet_weights=(0.1, 0.3, 0.6),
+    quiet_days=20,
+    avoid_multiplier=3.0,
+    top_k=10
+):
+    avoid_set = load_avoid_set(avoid_list_path) if use_avoid_list else set()
+
+    candidates = [
+        nid for nid, data in graph.nodes(data=True)
+        if data.get("security_status", 0) >= 0.5
+        and data.get("faction_name", "").lower() == target_faction.lower()
+    ]
+
+    results = []
+
+    for system_id in tqdm(candidates, desc="Evaluating candidates"):
+        visited = set()
+        queue = deque([(system_id, 0)])
+        ls_penalty_score = 0
+        ls_systems = []
+        close_hs_qfs = []
+
+        # Cache high-sec-only reachable systems from this system
+        hs_reachable_set = count_highsec_reachable_nodes(graph, system_id, spawn_radius)
+
+        while queue:
+            nid, dist = queue.popleft()
+            if nid in visited or dist > spawn_radius:
+                continue
+            visited.add(nid)
+
+            node = graph.nodes[nid]
+            sec = node.get("security_status", 0)
+            name = node.get("system_name", "Unknown")
+
+            ds = displayed_sec(sec)
+
+            if sec >= 0.5 and dist <= close_range:
+                qf = compute_quiet_factor(nid, quiet_weights, quiet_days)
+                if qf:
+                    close_hs_qfs.append(qf[0])
+
+            elif 0.1 <= ds < 0.5:
+                remaining_range = spawn_radius - dist
+                from_ls_reachable = count_reachable_nodes(graph, nid, remaining_range)
+                exposure = len(from_ls_reachable - hs_reachable_set)
+                penalty = avoid_multiplier if name in avoid_set else 1.0
+                ls_penalty_score += exposure * penalty
+                ls_systems.append((name, dist, penalty))
+
+            for neighbor in graph[nid]:
+                if neighbor not in visited:
+                    queue.append((neighbor, dist + 1))
+
+        base_qf_data = compute_quiet_factor(system_id, quiet_weights, quiet_days)
+        if not base_qf_data:
+            continue
+
+        avg_close_qf = sum(close_hs_qfs) / len(close_hs_qfs) if close_hs_qfs else None
+        ls_dists = [d for _, d, _ in ls_systems]
+
+        results.append({
+            "id": system_id,
+            "name": graph.nodes[system_id]["system_name"],
+            "region": graph.nodes[system_id].get("region_name", "Unknown"),
+            "sec": displayed_sec(graph.nodes[system_id].get("security_status", 0)),
+            "score": ls_penalty_score,
+            "quiet_factor": base_qf_data[0],
+            "avg_surrounding_qf": avg_close_qf,
+            "nearby_hs_count": len(close_hs_qfs),
+            "lowsec_neighbors": ls_systems,
+            "ls_count": len(ls_dists),
+            "ls_avg_dist": sum(ls_dists) / len(ls_dists) if ls_dists else None
+        })
+
+    # Sort by score
+    results.sort(key=lambda x: x["score"])
+
+     # Normalize metrics for color scaling
+    score_vals = [r["score"] for r in results[:top_k]]
+    qf_vals = [r["quiet_factor"] for r in results[:top_k]]
+    hs_counts = [r["nearby_hs_count"] for r in results[:top_k]]
+    ls_counts = [r["ls_count"] for r in results[:top_k]]
+    avg_ls_dists = [r["ls_avg_dist"] for r in results[:top_k] if r["ls_avg_dist"] is not None]
+
+    min_score, max_score = min(score_vals), max(score_vals)
+    min_qf, max_qf = min(qf_vals), max(qf_vals)
+    max_hs = max(hs_counts)
+    max_ls = max(ls_counts)
+    min_ls_avg_dist, max_ls_avg_dist = (
+        min(avg_ls_dists), max(avg_ls_dists)
+    ) if avg_ls_dists else (0, 1)
+
+    print(f"\nTop {top_k} candidate systems for DED farming ({target_faction}):")
+    for r in results[:top_k]:
+        print(f"\n--- {r['name']} ({r['region']}) ({r['sec']}) — {graph.nodes[r['id']].get('constellation_name', 'Unknown')} ---")
+        print(f"Score: {colorize(r['score'], min_score, max_score)}")
+        print(f"Quiet Factor: {colorize(r['quiet_factor'], min_qf, max_qf)}")
+        if r['avg_surrounding_qf'] is not None:
+            print(f"Avg Nearby HS Quietness (≤ {close_range} jumps): {colorize(r['avg_surrounding_qf'], min_qf, max_qf)}")
+        print(f"Nearby HS Systems: {colorize(r['nearby_hs_count'], 0, max_hs)}")
+        print(f"Nearby LS Systems in range: {colorize(r['ls_count'], 0, max_ls)}")
+
+        if r['ls_avg_dist'] is not None:
+            print(f"Avg LS Distance: {colorize(r['ls_avg_dist'], min_ls_avg_dist, max_ls_avg_dist, reverse=True)}")
+
+        # Summarize LS system distances
+        dist_summary = defaultdict(int)
+        for _, dist, _ in r["lowsec_neighbors"]:
+            dist_summary[dist] += 1
+        if dist_summary:
+            print("LS system distance distribution:")
+            for dist in sorted(dist_summary):
+                print(f"  - {dist_summary[dist]} at distance {dist}")
+
+        avoid_ls = []
+
+        # Create reverse lookup from system name to node ID
+        name_to_id = {
+            data.get("system_name", "").strip(): nid
+            for nid, data in graph.nodes(data=True)
+        }
+
+        for avoid_name in avoid_set:
+            nid = name_to_id.get(avoid_name)
+            if not nid:
+                continue  # Skip unknown names
+
+            # BFS from the candidate system to find distance
+            visited = set()
+            q = deque([(r["id"], 0)])
+            while q:
+                current, d = q.popleft()
+                if current == nid:
+                    if d <= spawn_radius:
+                        avoid_ls.append((avoid_name, d))
+                    break
+                if current in visited or d > spawn_radius:
+                    continue
+                visited.add(current)
+                for neighbor in graph[current]:
+                    if neighbor not in visited:
+                        q.append((neighbor, d + 1))
+
+                # ✅ Final clean print
+        if avoid_ls:
+            print("Avoid-list systems (within radius):")
+            for name, dist in sorted(avoid_ls, key=lambda x: x[1]):
+                dist_col = colorize(dist, 0, spawn_radius, reverse=True)
+                print(f"  - \033[91m{name}\033[0m (Distance: {dist_col})")
+
+    return results
