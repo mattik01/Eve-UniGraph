@@ -1,5 +1,9 @@
 # EVE Unigraph
 
+> ## 🚧 WORK IN PROGRESS 🚧
+> Lightweight and early — functional but minimal. Expect changes; a restructure,
+> visual elements, and a daily update routine are planned. Use at your own pace.
+
 **EVE Unigraph** is a Python-based toolkit and data pipeline for building, exploring, and analyzing a graph of the entire EVE Online universe. It empowers users to update the data to their desired degree of accuracy and run custom queries to answer their questions about New Eden.
 
 ## Components
